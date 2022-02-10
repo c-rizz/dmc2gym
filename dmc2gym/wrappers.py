@@ -2,7 +2,32 @@ from gym import core, spaces
 from dm_control import suite
 from dm_env import specs
 import numpy as np
+import gym
 
+
+def spec_to_gym(spec):
+    if type(spec) == specs.BoundedArray:
+        low = spec.minimum.item() if np.ndim(spec.minimum)==0 else spec.minimum
+        high = spec.maximum.item() if np.ndim(spec.maximum)==0 else spec.maximum
+        # print(f"low = {low} scalar = {np.isscalar(low)} shape = {spec.shape}")
+        space = gym.spaces.Box( low = low,
+                                high = high,
+                                shape = spec.shape,
+                                dtype = spec.dtype)
+    elif type(spec) == specs.Array:
+        space = gym.spaces.Box( low = spec.dtype("-inf"),
+                                high = spec.dtype("+inf"),
+                                shape = spec.shape,
+                                dtype = spec.dtype)
+    elif type(spec) == dict:
+        spacedict = {}
+        for subspec_name, subspec in spec.items():
+            spacedict[subspec_name] = spec_to_gym(subspec)
+        space = gym.spaces.Dict(spacedict)
+    else:
+        raise AttributeError(f"Unsupported spec type "+str(type(spec)))
+    return space
+            
 
 def _spec_to_box(spec, dtype):
     def extract_min_max(s):
@@ -26,19 +51,14 @@ def _spec_to_box(spec, dtype):
     return spaces.Box(low, high, dtype=dtype)
 
 
-def _flatten_obs(obs):
-    obs_pieces = []
-    for v in obs.values():
-        flat = np.array([v]) if np.isscalar(v) else v.ravel()
-        obs_pieces.append(flat)
-    return np.concatenate(obs_pieces, axis=0)
 
 
 class DMCWrapper(core.Env):
     def __init__(
         self,
-        domain_name,
-        task_name,
+        domain_name = None,
+        task_name = None,
+        env : core.Env = None,
         task_kwargs=None,
         visualize_reward={},
         from_pixels=False,
@@ -57,17 +77,24 @@ class DMCWrapper(core.Env):
         self._frame_skip = frame_skip
         self._channels_first = channels_first
 
-        # create task
-        self._env = suite.load(
-            domain_name=domain_name,
-            task_name=task_name,
-            task_kwargs=task_kwargs,
-            visualize_reward=visualize_reward,
-            environment_kwargs=environment_kwargs
-        )
+        if env is not None:
+            if domain_name is not None or task_name is not None:
+                raise AttributeError(f"env is not None but domain_name = {domain_name} and task_name = {task_name}. Can only use either env or (domain,task).")
+            self._env = env
+        elif domain_name is not None and task_name is not None:
+            # create task
+            self._env = suite.load(
+                domain_name=domain_name,
+                task_name=task_name,
+                task_kwargs=task_kwargs,
+                visualize_reward=visualize_reward,
+                environment_kwargs=environment_kwargs
+            )
+        else:
+            raise AttributeError(f"No valid env selected: domain_name = {domain_name}, task_name = {task_name}, env = {env}")
 
         # true and normalized action spaces
-        self._true_action_space = _spec_to_box([self._env.action_spec()], np.float32)
+        self._true_action_space = spec_to_gym(self._env.action_spec()) #_spec_to_box([self._env.action_spec()], np.float32)
         self._norm_action_space = spaces.Box(
             low=-1.0,
             high=1.0,
@@ -82,15 +109,9 @@ class DMCWrapper(core.Env):
                 low=0, high=255, shape=shape, dtype=np.uint8
             )
         else:
-            self._observation_space = _spec_to_box(
-                self._env.observation_spec().values(),
-                np.float64
-            )
+            self._observation_space = spec_to_gym(self._env.observation_spec())
             
-        self._state_space = _spec_to_box(
-            self._env.observation_spec().values(),
-            np.float64
-        )
+        self._state_space = spec_to_gym(self._env.action_spec())
         
         self.current_state = None
 
@@ -110,7 +131,7 @@ class DMCWrapper(core.Env):
             if self._channels_first:
                 obs = obs.transpose(2, 0, 1).copy()
         else:
-            obs = _flatten_obs(time_step.observation)
+            obs = time_step.observation
         return obs
 
     def _convert_action(self, action):
@@ -157,13 +178,13 @@ class DMCWrapper(core.Env):
             if done:
                 break
         obs = self._get_obs(time_step)
-        self.current_state = _flatten_obs(time_step.observation)
+        self.current_state = time_step.observation
         extra['discount'] = time_step.discount
         return obs, reward, done, extra
 
     def reset(self):
         time_step = self._env.reset()
-        self.current_state = _flatten_obs(time_step.observation)
+        self.current_state = time_step.observation
         obs = self._get_obs(time_step)
         return obs
 
