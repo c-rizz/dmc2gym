@@ -3,6 +3,7 @@ from dm_control import suite
 from dm_env import specs
 import numpy as np
 import gym
+from collections import OrderedDict
 
 
 def spec_to_gym(spec):
@@ -10,16 +11,24 @@ def spec_to_gym(spec):
         low = spec.minimum.item() if np.ndim(spec.minimum)==0 else spec.minimum
         high = spec.maximum.item() if np.ndim(spec.maximum)==0 else spec.maximum
         # print(f"low = {low} scalar = {np.isscalar(low)} shape = {spec.shape}")
+        if isinstance(spec.dtype, np.dtype):
+            dtype_type = spec.dtype.type
+        else:
+            dtype_type = spec.dtype
         space = gym.spaces.Box( low = low,
                                 high = high,
                                 shape = spec.shape,
-                                dtype = spec.dtype)
+                                dtype = dtype_type)
     elif type(spec) == specs.Array:
-        space = gym.spaces.Box( low = spec.dtype("-inf"),
-                                high = spec.dtype("+inf"),
+        if isinstance(spec.dtype, np.dtype):
+            dtype_type = spec.dtype.type
+        else:
+            dtype_type = spec.dtype
+        space = gym.spaces.Box( low = dtype_type("-inf"),
+                                high = dtype_type("+inf"),
                                 shape = spec.shape,
-                                dtype = spec.dtype)
-    elif type(spec) == dict:
+                                dtype = dtype_type)
+    elif type(spec) == dict or type(spec) == OrderedDict:
         spacedict = {}
         for subspec_name, subspec in spec.items():
             spacedict[subspec_name] = spec_to_gym(subspec)
