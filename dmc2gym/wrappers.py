@@ -61,6 +61,14 @@ def _spec_to_box(spec, dtype):
 
 
 
+def _flatten_obs(obs):
+    obs_pieces = []
+    for v in obs.values():
+        flat = np.array([v]) if np.isscalar(v) else v.ravel()
+        obs_pieces.append(flat)
+    return np.concatenate(obs_pieces, axis=0)
+
+
 
 class DMCWrapper(core.Env):
     def __init__(
@@ -76,7 +84,8 @@ class DMCWrapper(core.Env):
         camera_id=0,
         frame_skip=1,
         environment_kwargs=None,
-        channels_first=True
+        channels_first=True,
+        flatten_obs=False
     ):
         assert 'random' in task_kwargs, 'please specify a seed, for deterministic behaviour'
         self._from_pixels = from_pixels
@@ -85,6 +94,7 @@ class DMCWrapper(core.Env):
         self._camera_id = camera_id
         self._frame_skip = frame_skip
         self._channels_first = channels_first
+        self._flatten_obs = flatten_obs
 
         if env is not None:
             if domain_name is not None or task_name is not None:
@@ -103,7 +113,10 @@ class DMCWrapper(core.Env):
             raise AttributeError(f"No valid env selected: domain_name = {domain_name}, task_name = {task_name}, env = {env}")
 
         # true and normalized action spaces
-        self._true_action_space = spec_to_gym(self._env.action_spec()) #_spec_to_box([self._env.action_spec()], np.float32)
+        if self._flatten_obs:
+            self._true_action_space = _spec_to_box([self._env.action_spec()], np.float32)
+        else:
+            self._true_action_space = spec_to_gym(self._env.action_spec())
         self._norm_action_space = spaces.Box(
             low=-1.0,
             high=1.0,
@@ -118,10 +131,17 @@ class DMCWrapper(core.Env):
                 low=0, high=255, shape=shape, dtype=np.uint8
             )
         else:
-            self._observation_space = spec_to_gym(self._env.observation_spec())
-            
-        self._state_space = spec_to_gym(self._env.action_spec())
+            if self._flatten_obs:
+                self._observation_space = _spec_to_box(self._env.observation_spec().values(),
+                                                        np.float64)
+            else:
+                self._observation_space = spec_to_gym(self._env.observation_spec())
         
+        if self._flatten_obs:
+            self._state_space = _spec_to_box(self._env.observation_spec().values(),np.float64)
+        else:
+            self._state_space = spec_to_gym(self._env.action_spec())
+
         self.current_state = None
 
         # set seed
@@ -141,6 +161,9 @@ class DMCWrapper(core.Env):
                 obs = obs.transpose(2, 0, 1).copy()
         else:
             obs = time_step.observation
+            if self._flatten_obs:
+                obs = _flatten_obs(obs)
+
         return obs
 
     def _convert_action(self, action):
@@ -188,12 +211,16 @@ class DMCWrapper(core.Env):
                 break
         obs = self._get_obs(time_step)
         self.current_state = time_step.observation
+        if self._flatten_obs:
+            self.current_state = _flatten_obs(self.current_state)
         extra['discount'] = time_step.discount
         return obs, reward, done, extra
 
     def reset(self):
         time_step = self._env.reset()
         self.current_state = time_step.observation
+        if self._flatten_obs:
+            self.current_state = _flatten_obs(self.current_state)
         obs = self._get_obs(time_step)
         return obs
 
